@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "ETA Invoice Exporter",
+  "version": "1.0.0",
+  "description": "Export invoice data from Egyptian eInvoicing portal to Excel",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://invoicing.eta.gov.eg/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ETA Invoice Exporter"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://invoicing.eta.gov.eg/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["libs/xlsx.full.min.js"],
+      "matches": ["https://invoicing.eta.gov.eg/*"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
