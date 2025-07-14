@@ -172,69 +172,19 @@ class ETAContentScript {
   
   extractPaginationInfo() {
     try {
-      // Extract total count from various possible locations
-      const totalSelectors = [
-        '.eta-pagination-totalrecordCount-label',
-        '[class*="pagination"] [class*="total"]',
-        '[class*="record"] [class*="count"]',
-        '.ms-CommandBar-primaryCommand',
-        '.ms-Label'
-      ];
-      
-      for (const selector of totalSelectors) {
-        const totalLabel = document.querySelector(selector);
-        if (totalLabel) {
-          const text = totalLabel.textContent;
-          const match = text.match(/النتائج:\s*(\d+)|(\d+)\s*نتيجة|Total:\s*(\d+)|(\d+)\s*items?/i);
-          if (match) {
-            this.totalCount = parseInt(match[1] || match[2] || match[3] || match[4]);
-            break;
-          }
-        }
-      }
+      // Extract total count more comprehensively
+      this.totalCount = this.extractTotalCount();
       
       // Extract current page
-      const pageSelectors = [
-        '.eta-pageNumber.is-checked',
-        '[class*="page"][class*="current"]',
-        '[class*="active"][class*="page"]',
-        '.ms-Button--primary[aria-pressed="true"]'
-      ];
+      this.currentPage = this.extractCurrentPage();
       
-      for (const selector of pageSelectors) {
-        const currentPageBtn = document.querySelector(selector);
-        if (currentPageBtn) {
-          const pageLabel = currentPageBtn.querySelector('.ms-Button-label, [class*="label"], [class*="text"]') || currentPageBtn;
-          const pageText = pageLabel.textContent.trim();
-          const pageNum = parseInt(pageText);
-          if (!isNaN(pageNum)) {
-            this.currentPage = pageNum;
-            break;
-          }
-        }
-      }
+      // Extract total pages more accurately
+      this.totalPages = this.extractTotalPages();
       
-      // Calculate total pages
-      const visibleRows = this.getVisibleInvoiceRows();
-      const itemsPerPage = Math.max(visibleRows.length, 10);
-      this.totalPages = Math.ceil(this.totalCount / itemsPerPage);
-      
-      // If we can't determine total count, try to find last page number
-      if (this.totalCount === 0 || this.totalPages === 0) {
-        const pageButtons = document.querySelectorAll('.eta-pageNumber, [class*="pageNumber"], .ms-Button[aria-label*="Page"]');
-        let maxPage = 1;
-        
-        pageButtons.forEach(btn => {
-          const label = btn.querySelector('.ms-Button-label, [class*="label"]') || btn;
-          const pageNum = parseInt(label.textContent.trim());
-          if (!isNaN(pageNum) && pageNum > maxPage) {
-            maxPage = pageNum;
-          }
-        });
-        
-        this.totalPages = Math.max(maxPage, this.currentPage);
-        this.totalCount = this.totalPages * itemsPerPage;
-      }
+      // Ensure we have valid values
+      this.currentPage = Math.max(this.currentPage, 1);
+      this.totalPages = Math.max(this.totalPages, this.currentPage);
+      this.totalCount = Math.max(this.totalCount, this.invoiceData.length);
       
       console.log(`ETA Exporter: Page ${this.currentPage} of ${this.totalPages}, Total: ${this.totalCount} invoices`);
       
@@ -242,9 +192,152 @@ class ETAContentScript {
       console.warn('ETA Exporter: Error extracting pagination info:', error);
       // Set defaults
       this.currentPage = 1;
-      this.totalPages = 1;
+      this.totalPages = this.findMaxPageNumber() || 1;
       this.totalCount = this.invoiceData.length;
     }
+  }
+  
+  extractTotalCount() {
+    // Method 1: Look for total count in various UI elements
+    const totalSelectors = [
+      '.eta-pagination-totalrecordCount-label',
+      '[class*="pagination"] [class*="total"]',
+      '[class*="record"] [class*="count"]',
+      '.ms-CommandBar-primaryCommand',
+      '.ms-Label',
+      '[class*="total"]',
+      '[class*="count"]'
+    ];
+    
+    for (const selector of totalSelectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const element of elements) {
+        const text = element.textContent || '';
+        // Look for patterns like "النتائج: 299" or "299 نتيجة" or "Total: 299"
+        const patterns = [
+          /النتائج:\s*(\d+)/i,
+          /(\d+)\s*نتيجة/i,
+          /Total:\s*(\d+)/i,
+          /(\d+)\s*items?/i,
+          /(\d+)\s*results?/i,
+          /من\s*(\d+)/i,
+          /of\s*(\d+)/i
+        ];
+        
+        for (const pattern of patterns) {
+          const match = text.match(pattern);
+          if (match) {
+            const count = parseInt(match[1]);
+            if (count > 0) {
+              console.log(`ETA Exporter: Found total count ${count} using pattern ${pattern} in text: "${text}"`);
+              return count;
+            }
+          }
+        }
+      }
+    }
+    
+    // Method 2: Look in pagination info text
+    const paginationTexts = document.querySelectorAll('[class*="pagination"], [class*="pager"], .ms-CommandBar');
+    for (const element of paginationTexts) {
+      const text = element.textContent || '';
+      const match = text.match(/(\d+)\s*-\s*(\d+)\s*من\s*(\d+)|(\d+)\s*-\s*(\d+)\s*of\s*(\d+)/i);
+      if (match) {
+        const total = parseInt(match[3] || match[6]);
+        if (total > 0) {
+          console.log(`ETA Exporter: Found total count ${total} from pagination text: "${text}"`);
+          return total;
+        }
+      }
+    }
+    
+    return 0;
+  }
+  
+  extractCurrentPage() {
+    const pageSelectors = [
+      '.eta-pageNumber.is-checked',
+      '[class*="page"][class*="current"]',
+      '[class*="active"][class*="page"]',
+      '.ms-Button--primary[aria-pressed="true"]',
+      '[aria-pressed="true"]',
+      '.is-selected',
+      '.selected'
+    ];
+    
+    for (const selector of pageSelectors) {
+      const currentPageBtn = document.querySelector(selector);
+      if (currentPageBtn) {
+        const pageLabel = currentPageBtn.querySelector('.ms-Button-label, [class*="label"], [class*="text"]') || currentPageBtn;
+        const pageText = pageLabel.textContent.trim();
+        const pageNum = parseInt(pageText);
+        if (!isNaN(pageNum) && pageNum > 0) {
+          return pageNum;
+        }
+      }
+    }
+    
+    return 1;
+  }
+  
+  extractTotalPages() {
+    // Method 1: Look for explicit total pages indicator
+    const paginationTexts = document.querySelectorAll('[class*="pagination"], [class*="pager"], .ms-CommandBar');
+    for (const element of paginationTexts) {
+      const text = element.textContent || '';
+      // Look for patterns like "صفحة 1 من 15" or "Page 1 of 15"
+      const match = text.match(/صفحة\s*\d+\s*من\s*(\d+)|page\s*\d+\s*of\s*(\d+)/i);
+      if (match) {
+        const totalPages = parseInt(match[1] || match[2]);
+        if (totalPages > 0) {
+          console.log(`ETA Exporter: Found total pages ${totalPages} from text: "${text}"`);
+          return totalPages;
+        }
+      }
+    }
+    
+    // Method 2: Find the highest page number in pagination buttons
+    return this.findMaxPageNumber();
+  }
+  
+  findMaxPageNumber() {
+    const pageButtons = document.querySelectorAll(
+      '.eta-pageNumber, [class*="pageNumber"], .ms-Button[aria-label*="Page"], [class*="page-"], .ms-Button'
+    );
+    
+    let maxPage = 1;
+    
+    pageButtons.forEach(btn => {
+      const label = btn.querySelector('.ms-Button-label, [class*="label"], [class*="text"]') || btn;
+      const buttonText = label.textContent.trim();
+      const pageNum = parseInt(buttonText);
+      
+      if (!isNaN(pageNum) && pageNum > maxPage) {
+        maxPage = pageNum;
+      }
+      
+      // Also check aria-label for page numbers
+      const ariaLabel = btn.getAttribute('aria-label') || '';
+      const ariaMatch = ariaLabel.match(/page\s*(\d+)|صفحة\s*(\d+)/i);
+      if (ariaMatch) {
+        const ariaPageNum = parseInt(ariaMatch[1] || ariaMatch[2]);
+        if (!isNaN(ariaPageNum) && ariaPageNum > maxPage) {
+          maxPage = ariaPageNum;
+        }
+      }
+    });
+    
+    // Also look for "..." or ellipsis indicators which might suggest more pages
+    const ellipsisButtons = document.querySelectorAll('[class*="ellipsis"], .ms-Button');
+    ellipsisButtons.forEach(btn => {
+      if (btn.textContent.includes('...') || btn.textContent.includes('…')) {
+        // If we see ellipsis, there are likely more pages than we can see
+        // We'll discover them during navigation
+        console.log('ETA Exporter: Found ellipsis in pagination, more pages may exist');
+      }
+    });
+    
+    return maxPage;
   }
   
   extractDataFromRow(row, index) {
@@ -539,37 +632,50 @@ class ETAContentScript {
       
       console.log(`ETA Exporter: Starting to load all pages. Current: ${this.currentPage}, Total: ${this.totalPages}`);
       
-      // First, get current page data
-      this.scanForInvoices();
-      
-      if (this.totalPages <= 1) {
-        this.allPagesData = [...this.invoiceData];
-        console.log(`ETA Exporter: Only one page, collected ${this.allPagesData.length} invoices`);
-        return {
-          success: true,
-          data: this.allPagesData,
-          totalProcessed: this.allPagesData.length
-        };
+      // Start from page 1 to ensure we get everything
+      if (this.currentPage !== 1) {
+        const navigated = await this.navigateToPageReliably(1);
+        if (navigated) {
+          await this.waitForPageLoadComplete();
+          this.extractPaginationInfo();
+        }
       }
       
-      // Process all pages sequentially for better reliability
-      for (let page = 1; page <= this.totalPages; page++) {
+      // Get current page data
+      this.scanForInvoices();
+      
+      // Use dynamic page discovery instead of relying on totalPages
+      let currentPageNum = 1;
+      let hasMorePages = true;
+      let consecutiveEmptyPages = 0;
+      const maxConsecutiveEmpty = 3; // Stop after 3 consecutive empty pages
+      const maxPages = 1000; // Safety limit
+      
+      while (hasMorePages && currentPageNum <= maxPages && consecutiveEmptyPages < maxConsecutiveEmpty) {
         try {
           if (this.progressCallback) {
             this.progressCallback({
-              currentPage: page,
-              totalPages: this.totalPages,
-              message: `جاري معالجة الصفحة ${page} من ${this.totalPages}...`,
-              percentage: (page / this.totalPages) * 100
+              currentPage: currentPageNum,
+              totalPages: Math.max(this.totalPages, currentPageNum),
+              message: `جاري معالجة الصفحة ${currentPageNum}...`,
+              percentage: this.totalPages > 0 ? (currentPageNum / this.totalPages) * 100 : 0
             });
           }
           
-          // Navigate to page if not current
-          if (page !== this.currentPage) {
-            const navigated = await this.navigateToPageReliably(page);
+          // Navigate to page if not already there
+          if (currentPageNum !== this.currentPage) {
+            const navigated = await this.navigateToPageReliably(currentPageNum);
             if (!navigated) {
-              console.warn(`Failed to navigate to page ${page}, skipping...`);
-              continue;
+              console.warn(`Failed to navigate to page ${currentPageNum}, trying next page navigation...`);
+              
+              // Try to go to next page instead
+              const nextSuccess = await this.navigateToNextPage();
+              if (!nextSuccess) {
+                console.log('No more pages available, stopping...');
+                break;
+              }
+              await this.waitForPageLoadComplete();
+              this.extractPaginationInfo();
             }
           }
           
@@ -580,25 +686,56 @@ class ETAContentScript {
           this.scanForInvoices();
           
           if (this.invoiceData.length > 0) {
+            consecutiveEmptyPages = 0; // Reset counter
+            
             // Add page data to collection
             const pageData = this.invoiceData.map(invoice => ({
               ...invoice,
-              pageNumber: page,
+              pageNumber: currentPageNum,
               serialNumber: this.allPagesData.length + invoice.index
             }));
             
             this.allPagesData.push(...pageData);
-            console.log(`ETA Exporter: Page ${page} processed, collected ${this.invoiceData.length} invoices. Total so far: ${this.allPagesData.length}`);
+            console.log(`ETA Exporter: Page ${currentPageNum} processed, collected ${this.invoiceData.length} invoices. Total so far: ${this.allPagesData.length}`);
           } else {
-            console.warn(`ETA Exporter: No invoices found on page ${page}`);
+            consecutiveEmptyPages++;
+            console.warn(`ETA Exporter: No invoices found on page ${currentPageNum} (${consecutiveEmptyPages} consecutive empty pages)`);
           }
           
-          // Small delay between pages
-          await this.delay(500);
+          // Check if we can go to next page
+          const canGoNext = await this.canNavigateToNextPage();
+          if (!canGoNext) {
+            console.log('ETA Exporter: No more pages available, stopping...');
+            hasMorePages = false;
+            break;
+          }
+          
+          // Try to navigate to next page
+          const nextSuccess = await this.navigateToNextPage();
+          if (!nextSuccess) {
+            console.log('ETA Exporter: Failed to navigate to next page, stopping...');
+            hasMorePages = false;
+            break;
+          }
+          
+          currentPageNum++;
+          
+          // Update our understanding of total pages
+          this.totalPages = Math.max(this.totalPages, currentPageNum);
+          
+          // Small delay between pages for stability
+          await this.delay(800);
           
         } catch (error) {
-          console.error(`Error processing page ${page}:`, error);
-          // Continue with next page
+          console.error(`Error processing page ${currentPageNum}:`, error);
+          consecutiveEmptyPages++;
+          
+          // Try to continue to next page
+          const nextSuccess = await this.navigateToNextPage();
+          if (!nextSuccess) {
+            break;
+          }
+          currentPageNum++;
         }
       }
       
@@ -622,6 +759,28 @@ class ETAContentScript {
     }
   }
   
+  async canNavigateToNextPage() {
+    const nextSelectors = [
+      '[data-icon-name="ChevronRight"]:not([disabled])',
+      '[data-icon-name="Next"]:not([disabled])',
+      '[aria-label*="Next"]:not([disabled])',
+      '[aria-label*="التالي"]:not([disabled])',
+      '.ms-Button[aria-label*="next"]:not([disabled])'
+    ];
+    
+    for (const selector of nextSelectors) {
+      const nextButton = document.querySelector(selector)?.closest('button');
+      if (nextButton && !nextButton.disabled && !nextButton.getAttribute('disabled')) {
+        const style = window.getComputedStyle(nextButton);
+        if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  }
+  
   async navigateToPageReliably(pageNumber) {
     try {
       console.log(`ETA Exporter: Navigating to page ${pageNumber}`);
@@ -636,7 +795,7 @@ class ETAContentScript {
         if (parseInt(buttonText) === pageNumber) {
           console.log(`ETA Exporter: Clicking page button ${pageNumber}`);
           btn.click();
-          await this.delay(1000);
+          await this.delay(1500);
           
           // Verify navigation
           await this.waitForPageLoadComplete();
@@ -651,7 +810,7 @@ class ETAContentScript {
       // Method 2: Sequential navigation
       const targetPage = pageNumber;
       let attempts = 0;
-      const maxAttempts = Math.abs(targetPage - this.currentPage) + 5;
+      const maxAttempts = Math.abs(targetPage - this.currentPage) + 10;
       
       while (this.currentPage !== targetPage && attempts < maxAttempts) {
         attempts++;
@@ -666,7 +825,7 @@ class ETAContentScript {
           if (!success) break;
         }
         
-        await this.delay(800);
+        await this.delay(1200);
         await this.waitForPageLoadComplete();
         this.extractPaginationInfo();
         
@@ -693,9 +852,14 @@ class ETAContentScript {
     for (const selector of nextSelectors) {
       const nextButton = document.querySelector(selector)?.closest('button');
       if (nextButton && !nextButton.disabled && !nextButton.getAttribute('disabled')) {
+        const style = window.getComputedStyle(nextButton);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+          continue;
+        }
+        
         console.log('ETA Exporter: Clicking next button');
         nextButton.click();
-        await this.delay(500);
+        await this.delay(800);
         return true;
       }
     }
@@ -716,9 +880,14 @@ class ETAContentScript {
     for (const selector of prevSelectors) {
       const prevButton = document.querySelector(selector)?.closest('button');
       if (prevButton && !prevButton.disabled && !prevButton.getAttribute('disabled')) {
+        const style = window.getComputedStyle(prevButton);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+          continue;
+        }
+        
         console.log('ETA Exporter: Clicking previous button');
         prevButton.click();
-        await this.delay(500);
+        await this.delay(800);
         return true;
       }
     }
@@ -740,16 +909,16 @@ class ETAContentScript {
         window.getComputedStyle(el).display !== 'none'
       );
       return !isLoading;
-    }, 8000);
+    }, 10000);
     
     // Wait for invoice rows to appear
     await this.waitForCondition(() => {
       const rows = this.getVisibleInvoiceRows();
       return rows.length > 0;
-    }, 8000);
+    }, 10000);
     
     // Wait for DOM stability
-    await this.delay(1000);
+    await this.delay(1500);
     
     console.log('ETA Exporter: Page load completed');
   }
@@ -765,7 +934,7 @@ class ETAContentScript {
       } catch (error) {
         // Ignore errors in condition check
       }
-      await this.delay(200);
+      await this.delay(300);
     }
     
     console.warn(`ETA Exporter: Condition timeout after ${timeout}ms`);
